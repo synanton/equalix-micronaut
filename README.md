@@ -240,6 +240,8 @@ Rows flip on the same evidence thresholds the family uses: **✅** only when the
 
 See [`docs/implementation.md`](docs/implementation.md) for the phased plan. The family's phase numbering continues from `equalix-go`'s EQLX-0 through EQLX-7:
 
+Phases are shared across the family — phase as stage, never as lockstep. The list below is the same stages, with this repo's per-phase scope differing: Phase 0 here is trivial (spec reuse, not re-extraction — one commit), Phase 1 domain core is a full rebuild (different language, same semantics), and Phase 5 differential is the first non-scaffolding phase (everything before it exists to enable the comparison). Do not read equal effort across repos from shared numbers.
+
 - **Phase 0** — Specification extraction (reuse `equalix-go`'s spec; no re-extraction)
 - **Phase 1** — Domain core (pure Java, no Micronaut dependencies)
 - **Phase 2** — Adapters (JDBC, Lettuce, Micronaut HTTP client)
