@@ -26,12 +26,30 @@ page-cache effects. DB wiped between runs. RSS = mean of 5 `ps` samples. n=2 per
   ideally pinned heap (`-Xmx` equal on both) to separate framework footprint from
   heap-growth behavior. Recorded here so the next run extends rather than repeats.
 
+## Interpretation (family reframe)
+
+−17% is smaller than the "Spring is heavy" prior would predict — and that *is* the
+finding. JVM-vs-Go RSS sits in the 4–6× range from `equalix-go`'s characterization;
+−17% Micronaut-vs-Spring says the JVM itself is the dominant RSS cost and Spring's
+runtime machinery is a smaller contributor than expected. The story this supports:
+**Micronaut wins on cold start (char-01: 3.2 vs 5.2 s) and image size, not on
+runtime profile.** char-03/04 test whether that holds under GC and throughput load.
+
+## Ready-point definition
+
+"Ready RSS" here means RSS at the instant readiness returns 200 — i.e., whichever
+allocation had triggered by then, heap ramp included. That is why it swings: it
+measures heap-trigger timing as much as footprint. The alternative (pin heap state
+with `-Xms` = `-Xmx` and let RSS stabilize) measures something cleaner but perturbs
+the system under test; kept as future work for citable deltas, not adopted here.
+
 ## Incidental parity signal
 
 `currentRps` converged to exactly `5.516015367592257` in all four runs on both
-sides — the adaptive controller is deterministic given the paced workload, and both
-implementations compute it identically. (Not a comparison claim; just evidence the
-load phase drove both schedulers through the same adaptation trajectory.)
+sides — claimed as **endpoint (fixed-point) convergence only**: the control law
+reaches the same steady state given this workload and config on both
+implementations. Trajectory convergence (bit-identical paths, not just endpoints)
+would need RPS sampled over the run; not measured here.
 
 ## Method notes
 
