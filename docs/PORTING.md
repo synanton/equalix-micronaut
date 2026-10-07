@@ -123,6 +123,35 @@ already bypass Micronaut Data via `TaskLockingQueries`).
   N-way differential — see below.
 - `Dockerfile` is JVM-based; GraalVM native-image is a possible fourth column later.
 
+## Test-driven main-code accommodations (reachability audit)
+
+Three production files changed shape for tests; all preserve the oracle's
+production-visible surface (Spring Data's `JpaRepository` already exposed
+`deleteAllInBatch`/`findAllById`/`findById` to production code — nothing new is
+reachable that wasn't before):
+
+- `deleteAllInBatch` on all six repositories — production-reachable (public repo
+  methods) but called only from test cleanup. Same exposure as the oracle's
+  inherited methods; not a new footgun.
+- `findAllById` (Task) / `findById` (HierarchyNode) — production-reachable
+  explicit `@Query` equivalents of the oracle's inherited methods. Same SQL
+  Hibernate would emit for `find`; covered by integration tests.
+- `findQueuedLeaves` moved to `TaskLockingQueries` (SessionFactory native) —
+  **production-reachable**: called by `HierarchicalDispatchPlanner` on every
+  hierarchical dispatch. Same SQL text, same params, same transaction
+  (caller's); verified by `HierarchicalFairnessIntegrationTest` (4/4) rather
+  than by construction. The locking readers moved the same way and are covered
+  by the dispatch suites.
+
+> NOTE — config placeholder defaults containing `://` are silently mangled.
+> `${X:jdbc:postgresql://localhost:5432/equalix}` resolves to `5432/equalix`
+> (not an error), producing a plausible-looking but invalid URL. Consequence:
+> `EQUALIX_JDBC_URL` is required with no default. Any future config key that
+> could carry a URL must follow the same pattern — required, no default,
+> fail-fast at startup. Same silent-default class as Spring's ignored
+> `spring.task.scheduling.enabled` flag: prefer loud failure over plausible
+>   misconfiguration.
+
 ## Comparison integration notes
 
 - **Endpoint path map** (per-side, for the harness — do not hardcode one side's):
