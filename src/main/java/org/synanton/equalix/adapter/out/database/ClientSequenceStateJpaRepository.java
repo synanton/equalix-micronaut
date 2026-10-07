@@ -31,4 +31,7 @@ public interface ClientSequenceStateJpaRepository extends GenericRepository<Clie
           )
         """, nativeQuery = true)
     List<ClientSequenceStateEntity> findReadyClients();
+
+    @Query("DELETE FROM ClientSequenceStateEntity c")
+    void deleteAllInBatch();
 }

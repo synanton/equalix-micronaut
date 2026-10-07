@@ -74,7 +74,7 @@ public class TaskRepositoryAdapter implements TaskRepositoryPort {
 
     @Override
     public List<QueuedLeaf> findQueuedLeaves() {
-        return jpaRepository.findQueuedLeaves().stream()
+        return lockingQueries.findQueuedLeaves().stream()
             .map(row -> new QueuedLeaf(
                 (String) row[0],
                 ((Number) row[1]).intValue(),

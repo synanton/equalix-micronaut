@@ -33,20 +33,6 @@ public interface TaskJpaRepository extends GenericRepository<TaskEntity, UUID> {
     List<TaskEntity> findByFairnessKeyAndStatusOrderByCreatedAtAsc(String fairnessKey, TaskStatus status);
 
     @Query(value = """
-        SELECT t.fairness_key,
-               COUNT(*),
-               SUM(CASE WHEN t.priority <= 0 THEN 1 ELSE 0 END),
-               MAX(t.weight),
-               COALESCE(MAX(cc.in_flight_count), 0)
-        FROM tasks t
-        LEFT JOIN client_counts cc ON cc.fairness_key = t.fairness_key
-        WHERE t.status = 'QUEUED'
-          AND t.is_sequential = false
-        GROUP BY t.fairness_key
-        """, nativeQuery = true)
-    List<Object[]> findQueuedLeaves();
-
-    @Query(value = """
         SELECT * FROM tasks
         WHERE status = 'QUEUED'
           AND is_sequential = false
@@ -90,4 +76,10 @@ public interface TaskJpaRepository extends GenericRepository<TaskEntity, UUID> {
         LIMIT :limit
         """, nativeQuery = true)
     List<TaskEntity> findTimedOutInFlight(long olderThanMs, int limit);
+
+    @Query("DELETE FROM TaskEntity t")
+    void deleteAllInBatch();
+
+    @Query("SELECT t FROM TaskEntity t WHERE t.id IN :ids")
+    List<TaskEntity> findAllById(java.util.Collection<java.util.UUID> ids);
 }

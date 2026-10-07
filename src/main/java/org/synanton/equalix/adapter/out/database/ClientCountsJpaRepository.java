@@ -37,4 +37,7 @@ public interface ClientCountsJpaRepository extends GenericRepository<ClientCount
 
     @Query("SELECT COALESCE(SUM(c.inFlightCount), 0) FROM ClientCountsEntity c")
     long totalInFlight();
+
+    @Query("DELETE FROM ClientCountsEntity c")
+    void deleteAllInBatch();
 }

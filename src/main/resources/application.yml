@@ -29,7 +29,10 @@ endpoints:
 
 datasources:
   default:
-    url: ${EQUALIX_JDBC_URL:jdbc:postgresql://localhost:5432/equalix}
+    # Required: placeholder defaults containing :// are mangled by Micronaut's
+    # placeholder parser, so there is intentionally no default here. Compose and
+    # tests always set it (same discipline as equalix-go's EQUALIX_DSN).
+    url: ${EQUALIX_JDBC_URL}
     username: ${EQUALIX_DB_USER:equalix}
     password: ${EQUALIX_DB_PASSWORD:equalix}
     driver-class-name: org.postgresql.Driver

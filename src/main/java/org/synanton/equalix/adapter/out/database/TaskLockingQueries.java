@@ -44,7 +44,7 @@ public class TaskLockingQueries {
                 FOR UPDATE OF t SKIP LOCKED
                 """, TaskEntity.class)
             .setParameter("limit", limit)
-            .setParameter("maxPerClient", maxPerClient)
+            .setParameter("maxPerClient", maxPerClient, Integer.class)
             .getResultList();
     }
 
@@ -67,7 +67,24 @@ public class TaskLockingQueries {
                 FOR UPDATE OF t SKIP LOCKED
                 """, TaskEntity.class)
             .setParameter("limit", limit)
-            .setParameter("maxPerClient", maxPerClient)
+            .setParameter("maxPerClient", maxPerClient, Integer.class)
+            .getResultList();
+    }
+
+    public List<Object[]> findQueuedLeaves() {
+        return sessionFactory.getCurrentSession()
+            .createNativeQuery("""
+                SELECT t.fairness_key,
+                       COUNT(*),
+                       SUM(CASE WHEN t.priority <= 0 THEN 1 ELSE 0 END),
+                       MAX(t.weight),
+                       COALESCE(MAX(cc.in_flight_count), 0)
+                FROM tasks t
+                LEFT JOIN client_counts cc ON cc.fairness_key = t.fairness_key
+                WHERE t.status = 'QUEUED'
+                  AND t.is_sequential = false
+                GROUP BY t.fairness_key
+                """)
             .getResultList();
     }
 

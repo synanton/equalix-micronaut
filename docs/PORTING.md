@@ -5,9 +5,9 @@ Package `org.synanton.equalix` kept identical so files diff cleanly against the 
 Migrations under `src/main/resources/db/migration/` are byte-identical to the oracle —
 schema divergence would invalidate every comparison.
 
-Verified so far: `mvn test` 217/217 green — the 179 oracle unit tests that don't
-need Spring/Testcontainers (copied verbatim) plus 4 Spring-coupled tests ported to
-Micronaut idioms (see below); app boots against PostgreSQL 16, Flyway migrates,
+Verified so far: `mvn test` 235/235 green — the 179 oracle unit tests that don't need Spring/Testcontainers (copied verbatim),
+4 Spring-coupled tests ported to Micronaut idioms (see below), and all 12 oracle
+integration tests ported to Micronaut Test + Testcontainers (see below); app boots against PostgreSQL 16, Flyway migrates,
 all schedulers tick; REST contract smoke-tested end to end
 (create → RECEIVED → QUEUED → DISPATCHED → complete → SUCCEEDED, auth, validation
 envelopes, 404s, `/health`, `/api/v1/status`).
@@ -101,10 +101,24 @@ envelopes, 404s, `/health`, `/api/v1/status`).
 - Management paths are Micronaut's (`/health`, `/info`, `/prometheus`) rather than
   `/actuator/*`; only `/health`, `/info` are public, same policy as the oracle.
 
+## Integration tests (all 12 oracle files ported — no gap)
+
+`@SpringBootTest` + `@MockBean` + `jdbc:tc:` → `@MicronautTest(transactional = false)` +
+`@MockBean` + static Testcontainers PostgreSQL shared by all classes. Scheduling off
+via test properties; jobs driven explicitly. MockMvc → blocking `HttpClient`
+(`/actuator/prometheus` → `/prometheus`); `@TestPropertySource` folds into the
+per-class `TestPropertyProvider` map. `CmsWarmUpListener` keeps its event parameter
+(Micronaut requires it); the test passes a synthetic `StartupEvent`.
+
+Framework findings from this pass: `TestPropertyProvider` on a shared abstract base
+is not picked up — each concrete test class implements it (datasource URL from the
+container holder, which self-starts on first use); `@Property` loses to provider-map
+values, so per-class overrides live in the provider map; untyped NULL query params
+need explicit types for PostgreSQL (`FOR UPDATE` readers and multi-column natives
+already bypass Micronaut Data via `TaskLockingQueries`).
+
 ## Not yet ported (for the comparison phase)
 
-- Integration tests (`BaseIntegrationTest` + 12, Testcontainers): port to
-  Micronaut Test + Testcontainers JUnit5.
 - Differential harness / benchmarks: characterization first (pairwise), not an
   N-way differential — see below.
 - `Dockerfile` is JVM-based; GraalVM native-image is a possible fourth column later.

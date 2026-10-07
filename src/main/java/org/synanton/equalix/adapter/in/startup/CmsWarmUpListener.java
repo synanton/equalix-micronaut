@@ -1,6 +1,5 @@
 package org.synanton.equalix.adapter.in.startup;
 
-import io.micronaut.context.annotation.Requires;
 import io.micronaut.context.event.StartupEvent;
 import io.micronaut.runtime.event.annotation.EventListener;
 import jakarta.inject.Singleton;
@@ -12,7 +11,6 @@ import org.synanton.equalix.domain.service.WatchdogService;
  * and underestimates every key until the first watchdog run. A new Redis layout version also starts empty.
  */
 @Singleton
-@Requires(property = "app.scheduling.enabled", value = "true", defaultValue = "true")
 public class CmsWarmUpListener {
 
     @Inject

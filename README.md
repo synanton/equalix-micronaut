@@ -17,7 +17,7 @@
 See [`docs/PORTING.md`](docs/PORTING.md) for the Spring→Micronaut mapping, the
 framework findings, and the intentional deviations.
 
-**State as of:** *(populated at first commit)* — full-parity port builds, 217/217
+**State as of:** *(populated at first commit)* — full-parity port builds, 235/235
 tests green (179 oracle unit tests verbatim + 4 Spring-coupled tests ported to
 Micronaut idioms), boots against PostgreSQL 16 with Flyway migrations,
 REST contract smoke-tested (create → RECEIVED → QUEUED → DISPATCHED → SUCCEEDED,
@@ -271,7 +271,9 @@ cd equalix-micronaut
 ./mvnw package
 docker build -t equalix-micronaut:local .
 docker run --rm \
-  -e EQUALIX_DSN=postgres://equalix:equalix@host:5432/equalix \
+  -e EQUALIX_JDBC_URL=jdbc:postgresql://host:5432/equalix \
+  -e EQUALIX_DB_USER=equalix \
+  -e EQUALIX_DB_PASSWORD=equalix \
   -p 8080:8080 \
   equalix-micronaut:local
 ```

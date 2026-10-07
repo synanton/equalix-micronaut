@@ -34,4 +34,10 @@ public interface HierarchyNodeJpaRepository extends GenericRepository<HierarchyN
                       updated_at = now()
         """, nativeQuery = true)
     void raiseChildrenFloor(String key, double floor);
+
+    @Query("DELETE FROM HierarchyNodeEntity h")
+    void deleteAllInBatch();
+
+    @Query("SELECT h FROM HierarchyNodeEntity h WHERE h.nodeKey = :id")
+    java.util.Optional<HierarchyNodeEntity> findById(String id);
 }

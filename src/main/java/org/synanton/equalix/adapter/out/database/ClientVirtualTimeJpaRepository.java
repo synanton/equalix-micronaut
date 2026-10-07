@@ -39,4 +39,7 @@ public interface ClientVirtualTimeJpaRepository extends GenericRepository<Client
                       updated_at = now()
         """, nativeQuery = true)
     void advanceVirtualTime(String key, double finishTag);
+
+    @Query("DELETE FROM ClientVirtualTimeEntity c")
+    void deleteAllInBatch();
 }

@@ -20,4 +20,7 @@ public interface SchedulerVirtualClockJpaRepository extends GenericRepository<Sc
                       updated_at = now()
         """, nativeQuery = true)
     void advance(double finishTag);
+
+    @Query("DELETE FROM SchedulerVirtualClockEntity c")
+    void deleteAllInBatch();
 }
