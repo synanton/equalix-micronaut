@@ -53,11 +53,16 @@ spawn→ready and image size, nowhere in sustained runtime behavior measured so 
 
 ## Method notes
 
-- Burst ingestion reintroduces the commit race at scale: slow multi-row dispatch
-  commits widen the window where a fast completion lands pre-commit and 400s
-  (Micronaut 12–15 stuck/timeout per run vs Spring 0 — same race, wider window
-  under burst; the §13 NOTE covers the mechanism). Throughput comparisons use
-  completed counts, which are unaffected.
+- Burst ingestion re-triggers the commit race at scale; attribution verified rather
+  than assumed: per-tick batch sizes identical (MN 4.3 vs Spring 4.2, max 6 both),
+  tick-duration profiles identical (p99 149 vs 140 ms), and rejected completions
+  land 157–193 ms after stub receipt with a 150 ms stub — i.e., inside outlier
+  slow ticks, exactly the race window. Residual asymmetry (MN 6–15 rejects/run vs
+  Spring 0 across 4 runs) is consistent with client-stack send timing — JDK
+  `sendAsync` writes immediately while Reactor defers through its pipeline,
+  narrowing Spring's effective windows — not with scheduler logic. Throughput
+  comparisons use completed counts and are unaffected; the §13 NOTE covers the
+  race mechanism.
 - RPS-limit values (≈90–109) sit above actual throughput (~75/s): the controller
   is not the binding constraint here, dispatch mechanics are.
 - Same caveats as char-03: G1/default heap both sides, 100 ms stub in the RPS
