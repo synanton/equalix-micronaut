@@ -32,6 +32,9 @@ public class HttpRemoteExecutorAdapter implements RemoteExecutorPort {
 
     public HttpRemoteExecutorAdapter(ExecutorProperties executorProperties, DispatchAckService dispatchAckService) {
         this.httpClient = HttpClient.newBuilder()
+            // HTTP/1.1, no h2c upgrade dance: stub/simple executors speak plain HTTP/1.1,
+            // and a failed upgrade round-trip would silently drop a fire-and-forget send.
+            .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(Duration.ofMillis(executorProperties.getConnectTimeoutMs()))
             .build();
         this.baseUrl = executorProperties.getBaseUrl();

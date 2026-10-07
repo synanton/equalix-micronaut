@@ -50,7 +50,7 @@ envelopes, 404s, `/health`, `/api/v1/status`).
 | API-key `OncePerRequestFilter` + Spring Security | `HttpServerFilter` (`@Filter("/**")`, 401 otherwise; `/health`, `/info` open) | Same `X-API-Key` contract |
 | Spring Data `JpaRepository` | Micronaut Data `GenericRepository` + explicit `@Query` | See "persistence" below |
 | `@Scheduled(fixedDelayString)` + ShedLock `@SchedulerLock` | `@Scheduled(fixedDelay="…ms")` / `fixedRate="…m"`, **no distributed lock** | ShedLock 5.x ships no Micronaut-4 integration; single-instance harness doesn't need it. Re-add before horizontal scaling |
-| `WebClient` (Reactor, fire-and-forget) | JDK `HttpClient.sendAsync` | Same wire bytes, same non-blocking semantics, zero framework coupling |
+| `WebClient` (Reactor, fire-and-forget) | JDK `HttpClient.sendAsync` | Same wire bytes, same non-blocking semantics, zero framework coupling. Pinned to HTTP/1.1 (no h2c upgrade dance against simple executors). Known harness edge, not production-verified against all servers: under sustained concurrency the JDK pooled client occasionally reads an empty response where Reactor Netty does not (~0.3–5% depending on stub); the Go differential stub is the arbiter |
 | `StringRedisTemplate` + Lua | Lettuce `StatefulRedisConnection` + `EVAL` | Same keys, same script, same local fallback |
 | Spring Kafka `@KafkaListener` + `Acknowledgment` | Micronaut `@KafkaListener` + `@Topic` (offset commits after return; throw → redelivery) | Same at-least-once contract |
 | Micrometer (same meter names) | Micronaut Micrometer (same `MeterRegistry` API) | Metric names untouched |
