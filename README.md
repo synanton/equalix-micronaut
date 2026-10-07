@@ -13,9 +13,15 @@
 
 ## Status
 
-**Pre-alpha.** Scoped, not yet implemented. See [`docs/implementation.md`](docs/implementation.md) for the phased plan.
+**Alpha.** Implemented and smoke-tested; not yet differentially validated.
+See [`docs/PORTING.md`](docs/PORTING.md) for the Spring→Micronaut mapping, the
+framework findings, and the intentional deviations.
 
-**State as of:** *(populated at first commit)* — scoped, no code.
+**State as of:** *(populated at first commit)* — full-parity port builds, 235/235
+tests green (179 oracle unit tests verbatim + 4 Spring-coupled tests ported to
+Micronaut idioms), boots against PostgreSQL 16 with Flyway migrations,
+REST contract smoke-tested (create → RECEIVED → QUEUED → DISPATCHED → SUCCEEDED,
+auth, validation envelopes, 404s, `/health`, `/api/v1/status`).
 **Oracle:** Java Spring Boot Equalix at the SHA recorded in [`docs/spec.md`](docs/spec.md) §13 (see the oracle determination entry).
 **Family baseline:** [equalix](https://github.com/synanton/equalix) (Spring Boot), [equalix-go](https://github.com/synanton/equalix-go) (Go).
 
@@ -145,48 +151,18 @@ Three implementations of one scheduler, one oracle:
 
 ## Comparison Dimensions
 
-`equalix-micronaut` exists to fill specific cells in the family's comparison matrix. The dimensions below are the interesting ones; scheduler-level throughput is deliberately not first.
+Four characterization runs and three differential pairs converge on one story:
+**AOT's advantage is bounded to cold start and image size — it does not extend
+to runtime profile.** The full matrix with cited numbers lives at the family
+level — this repo carries the port and its per-phase evidence, not a second
+copy of the numbers:
 
-### Startup profile
+[**Equalix family comparison →**](https://github.com/synanton/.github/blob/main/profile/experiments/equalix-family-comparison.md)
 
-|  Phase                   | Spring Boot | Micronaut | Go |
-|--------------------------|-------------|-----------|---|
-| Spawn → `main()`         | | | |
-| `main()` → context ready | | | |
-| Context → `/readyz` 200  | | | |
-| Ready → first dispatch   | | | |
-| **Total: spawn → first dispatch** | | | |
-
-Micronaut's AOT annotation processing should collapse the "context ready" phase; the JVM spawn cost is shared with Spring Boot.
-
-### Container footprint
-
-|                | Spring Boot | Micronaut |   Go   |
-|----------------|-------------|-----------|--------|
-| Image size     | | | |
-| Cold RSS       | | | |
-| Warm RSS       | | | |
-| RSS under load | | | |
-
-### Runtime characteristics
-
-|                                    | Spring Boot | Micronaut | Go |
-|------------------------------------|-------------|-----------|----|
-| GC pauses (p99)                    | | | n/a |
-| CPU per dispatch                   | | | |
-| Sustained RPS at ceiling           | | | |
-| Recovery time after backend outage | | | |
-
-### Optional fourth column — GraalVM native-image
-
-Micronaut supports GraalVM native-image compilation, which would produce a fourth runtime profile:
-
-|              | Spring Boot (JVM) | Micronaut (JVM) | Micronaut (native) | Go |
-|--------------|-------------------|-----------------|--------------------|----|
-| Cold start   | | | | |
-| Image size   | | | | |
-
-**Deferred.** Native-image build complexity is non-trivial and would expand the scope. Mentioned here so the matrix has room; not committed to.
+Provenance (Go-vs-Spring = independent reproduction; Spring-vs-Micronaut =
+port fidelity across seams; Go-vs-Micronaut = cross-runtime agreement) and
+caveats (drain tolerance, warmup asymmetry, explicit outs) are stated there,
+alongside the stopping-point declaration.
 
 ---
 
@@ -265,7 +241,9 @@ cd equalix-micronaut
 ./mvnw package
 docker build -t equalix-micronaut:local .
 docker run --rm \
-  -e EQUALIX_DSN=postgres://equalix:equalix@host:5432/equalix \
+  -e EQUALIX_JDBC_URL=jdbc:postgresql://host:5432/equalix \
+  -e EQUALIX_DB_USER=equalix \
+  -e EQUALIX_DB_PASSWORD=equalix \
   -p 8080:8080 \
   equalix-micronaut:local
 ```
@@ -285,6 +263,16 @@ Same discipline as the rest of the family:
 - DECISION / CORRECTION / NOTE taxonomy for spec §13 entries
 
 ------
+
+## Family
+
+Equalix has three implementations of the same scheduling semantics:
+Spring Boot ([equalix](https://github.com/synanton/equalix), the reference),
+Go ([equalix-go](https://github.com/synanton/equalix-go)), and Micronaut
+([equalix-micronaut](https://github.com/synanton/equalix-micronaut)).
+
+Startup, footprint and runtime characterization across all three:
+[**Equalix family comparison →**](https://github.com/synanton/.github/blob/main/profile/experiments/equalix-family-comparison.md).
 
 ## License
 
