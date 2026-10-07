@@ -189,16 +189,24 @@ tick-dominated and identical.
 
 | | Spring Boot | Micronaut | Go |
 |---|---|---|---|
-| Image size | 416 MB | 386 MB (−7%) | 16.1 MB (≈24× smaller) |
-| Cold RSS (at readiness) | 565–765 MiB | 450–806 MiB | 9.5 MiB |
+| Image size | 416 MB | 386 MB (−7%) | 16.1 MB (≈24× smaller; spot, same host) |
+| Cold RSS (at readiness) | 565–765 MiB | 450–806 MiB | 9.5–12.5 MiB (spot, same host) |
 | Warm RSS (+60 s idle) | 639–644 MiB | 717–806 MiB | not measured |
-| RSS under load (w2000) | 795–837 MiB | 665–696 MiB | not measured |
+| RSS under load (w2000) | 795–837 MiB | 665–696 MiB | ≈33 MiB under burst-backlog pressure (same host, w2000 burst) |
 
-Image and cold-start deltas are framework; the ≈50× cold-RSS gap to Go is the
-JVM itself. Within the JVM, only load RSS separates (−17% Micronaut, both
-passes); ready/idle are noise at n=2. Go warm/load RSS was never in this
-track's scope — the family's prior 4–6× figure reflects warmer conditions and
-is not directly comparable to these cold-idle snapshots.
+Image and cold-start deltas are framework; the cold-RSS gap (≈50×) and load gap
+(≈22×) are the JVM itself. Within the JVM, only load RSS separates (−17%
+Micronaut, both passes); ready/idle are noise at n=2.
+
+On the prior 4–6× figure: retired, explicitly. It was never measured against a
+stated definition — this matrix is the first real measurement, and it shows
+≈50× cold-idle and ≈22× under load (same host, same workload family). If a 4–6×
+number exists anywhere in family lore, it reflected different (capped-heap?
+warmer?) conditions and is superseded for these definitions. Go warm-idle RSS
+was not measured; all Go cells above are spot measurements on the same host
+(image build, spawn→ready poll, `ps`/`docker stats` snapshots), not char-01/02
+protocol runs — labeled as such so method difference is never mistaken for
+runtime difference.
 
 ### Runtime characteristics
 
