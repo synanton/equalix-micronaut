@@ -1,0 +1,203 @@
+micronaut:
+  application:
+    name: equalix-micronaut
+  server:
+    port: 8080
+  metrics:
+    enabled: true
+    export:
+      prometheus:
+        enabled: true
+        step: PT1M
+
+# Oracle parity: Spring Boot Jackson includes nulls and writes Instants as ISO-8601 strings.
+jackson:
+  serialization-inclusion: ALWAYS
+  serialization:
+    write-dates-as-timestamps: false
+
+endpoints:
+  health:
+    enabled: true
+    sensitive: false
+  info:
+    enabled: true
+    sensitive: false
+  prometheus:
+    enabled: true
+    sensitive: false
+
+datasources:
+  default:
+    url: ${EQUALIX_JDBC_URL:jdbc:postgresql://localhost:5432/equalix}
+    username: ${EQUALIX_DB_USER:equalix}
+    password: ${EQUALIX_DB_PASSWORD:equalix}
+    driver-class-name: org.postgresql.Driver
+    dialect: POSTGRES
+
+jpa:
+  default:
+    properties:
+      hibernate:
+        hbm2ddl:
+          auto: validate
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+    open-in-view: false
+
+flyway:
+  datasources:
+    default:
+      enabled: true
+      locations: classpath:db/migration
+
+# Redis is optional: set redis.uri (and app.queue.cms.mode=redis) to use the shared sketch.
+# redis:
+#   uri: redis://localhost:6379
+
+kafka:
+  # No broker in the base stack: the Kafka consumer retries in the background (same as
+  # the oracle), but its health indicator would fail /health. Disable just that indicator.
+  health:
+    enabled: false
+  bootstrap:
+    servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+  consumers:
+    default:
+      group-id: equalix-ingestion
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+
+app:
+  scheduling:
+    # Runs the priority calculator, dispatchers, watchdog and recovery jobs.
+    enabled: true
+  security:
+    api-key: ${EQUALIX_API_KEY:changeme}
+  executor:
+    base-url: http://localhost:9090
+    connect-timeout-ms: 2000
+    read-timeout-ms: 5000
+  kafka:
+    topics:
+      ingestion: equalix-tasks
+  queue:
+    max-tasks-in-process: 5000
+    max-per-client-quota: 500
+    priority-calc-interval: 100
+    dispatcher-interval: 50
+    worker-poll-size: 100
+    max-queued-time-ms: 60000
+    task-timeout-ms: 300000
+    max-payload-bytes: 1048576
+    # flat: every fairness key is an independent tenant. hierarchical: keys are paths (org/department/...)
+    # and every layer is scheduled fairly among its siblings, see app.hierarchical (EQX-7).
+    fairness-mode: flat
+    virtual-time:
+      # Virtual-time units charged per task at weight 1.0 (a task advances its key by quantum / weight).
+      # Comparable to the in-flight pressure term, which adds 1000 / currentRps per in-flight task.
+      quantum: 1000
+    aging:
+      # Anti-starvation aging A(W), subtracted from priority at dispatch time (W = seconds since creation).
+      # none | linear (lambda*W) | log (lambda*ln(1+W)) | power (lambda*W^gamma).
+      # max-queued-time-ms promotion stays active as a hard backstop for every policy.
+      policy: none
+      # Aging rate in priority units; one weight-1 task is worth virtual-time.quantum units.
+      lambda: 1000
+      # Exponent for the power policy; > 1 spares short waits and promotes long waits aggressively.
+      gamma: 2.0
+      # Rows locked from each candidate ordering (best priority, oldest) before re-ranking by aged priority.
+      candidate-pool-size: 200
+    cms:
+      mode: local
+      width: 65536
+      depth: 5
+      redis:
+        key-namespace: equalix:cms
+        fallback-to-local: true
+      error-sampling:
+        # Periodically sample e_k = CMS estimate - in-flight tasks and publish equalix.cms.estimation.error*
+        # (EQX-2). Meant for load tests: each sample runs a GROUP BY over in-flight tasks.
+        enabled: false
+        interval-ms: 1000
+    sequential:
+      enabled: true
+      client-block-timeout-ms: 60000
+      dispatcher-interval: 50
+      block-recovery-interval: 10000
+      result-passthrough-interval: 60000
+  adaptive-rps:
+    # Enable or disable the adaptive RPS controller entirely.
+    # When disabled, recordCompletion() silently skips recording and clears any existing window.
+    enabled: true
+    # Initial allowed requests per second (RPS) – the starting value before any adaptation.
+    initial-rps: 1
+    # Minimum allowed RPS – the absolute floor to prevent the controller from dropping too low.
+    # The controller will never set current RPS below this value.
+    min-rps: 1
+    # Maximum allowed RPS – the absolute ceiling to cap aggressive increases.
+    # The controller will never exceed this value.
+    max-rps: 100
+    # Target latency in milliseconds for remote calls. The controller compares the
+    # average latency from the sliding window against this target to decide adjustments.
+    target-latency-ms: 200
+    # Threshold fraction defining the "dead band" around the target latency.
+    # If avgLatency > target * (1 + latencyThreshold) - decrease RPS.
+    # If avgLatency < target * (1 - latencyThreshold) - increase RPS (provided error rate is low).
+    latency-threshold: 0.2
+    # Error rate threshold (as a fraction of failed completions in the window).
+    # When the observed error rate exceeds this value, the controller triggers an
+    # emergency brake – multiplying current RPS by emergency-factor.
+    error-threshold: 0.05
+    # Size of the sliding window – number of recent completion records kept for analysis.
+    window-size: 100
+    # Minimum number of samples required in the window before any adjustment is performed.
+    # Prevents premature reactions during cold start or after long idle periods.
+    min-samples: 10
+    # Factor applied to current RPS when the emergency brake is triggered.
+    # Typical value: 0.5 - halves the RPS immediately.
+    emergency-factor: 0.5
+    # Factor applied to current RPS when latency is too high (above target + threshold).
+    # Typical value: 0.9 - a gradual 10% decrease.
+    decrease-factor: 0.9
+
+    # Factor applied to current RPS when latency is low and error rate is below
+    # increase-error-threshold. Typical value: 1.05 → a cautious 5% increase.
+    increase-factor: 1.05
+
+    # Maximum error rate (fraction) allowed for the RPS to increase.
+    # If the observed error rate is equal to or greater than this value,
+    # the controller will not increase RPS even if latency is low.
+    increase-error-threshold: 0.01
+
+    # Stability controls (EQX-6). Setting alpha 1.0, interval 0 and confirmations 1 restores the
+    # pre-EQX-6 controller exactly, which re-applies a step on every completion and collapses to min-rps
+    # after one latency spike.
+    # Minimum time between two RPS adjustments. The latency signal is then the mean of the completions
+    # since the previous adjustment, and ramp-up becomes time-based (increase-factor per interval).
+    adjustment-interval-ms: 2000
+    # EMA weight of the newest latency measurement, in (0, 1]; 1 disables smoothing. It matters most for
+    # slow executors with only a few noisy samples per interval.
+    latency-ema-alpha: 0.7
+    # Consecutive agreeing evaluations required to reverse direction (increase after decrease or the
+    # opposite); 1 reverses immediately. The emergency brake is never dampened.
+    direction-change-confirmations: 3
+  hierarchical:
+    # Used when app.queue.fairness-mode is hierarchical.
+    separator: /
+    # Layers from the root down. Segments beyond the last layer fold into it; shorter keys are leaves higher up.
+    layers:
+      - name: organization
+        default-weight: 1.0
+      - name: department
+        default-weight: 1.0
+    # Per-node weight overrides by path, e.g. "[acme]": 2.0 or "[acme/sales]": 3.0. Leaves otherwise use the
+    # task weight; other nodes use their layer's default-weight.
+    weights: {}
+    # Layers (from the root) whose nodes get an equalix.hierarchy.dispatches{layer,node} counter.
+    metrics-depth: 1
+  watchdog:
+    interval-minutes: 5
+    # Keys exported as equalix.cms.estimation.drift{fairnessKey} per run (largest |drift| first).
+    drift-metric-max-keys: 100

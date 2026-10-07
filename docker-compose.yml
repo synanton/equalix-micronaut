@@ -1,0 +1,46 @@
+# Equalix Micronaut — local comparison stack (mirrors equalix/docker-compose.yml).
+#
+# Usage:
+#   EQUALIX_API_KEY=secret docker compose up --build
+#
+# Ports are host-configurable so the three implementations can run side by side:
+#   PG_PORT (default 5434), APP_PORT (default 8081).
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: equalix
+      POSTGRES_PASSWORD: equalix
+      POSTGRES_DB: equalix
+    ports:
+      - "${PG_PORT:-5434}:5432"
+    volumes:
+      - equalix-mn-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U equalix -d equalix"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  equalix-micronaut:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      EQUALIX_JDBC_URL: jdbc:postgresql://postgres:5432/equalix
+      EQUALIX_DB_USER: equalix
+      EQUALIX_DB_PASSWORD: equalix
+      EQUALIX_API_KEY: ${EQUALIX_API_KEY:?set EQUALIX_API_KEY before up}
+    ports:
+      - "${APP_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/health | grep -q '\"status\":\"UP\"'"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+volumes:
+  equalix-mn-pgdata:

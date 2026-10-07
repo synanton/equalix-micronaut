@@ -13,9 +13,15 @@
 
 ## Status
 
-**Pre-alpha.** Scoped, not yet implemented. See [`docs/implementation.md`](docs/implementation.md) for the phased plan.
+**Alpha.** Implemented and smoke-tested; not yet differentially validated.
+See [`docs/PORTING.md`](docs/PORTING.md) for the Spring→Micronaut mapping, the
+framework findings, and the intentional deviations.
 
-**State as of:** *(populated at first commit)* — scoped, no code.
+**State as of:** *(populated at first commit)* — full-parity port builds, 217/217
+tests green (179 oracle unit tests verbatim + 4 Spring-coupled tests ported to
+Micronaut idioms), boots against PostgreSQL 16 with Flyway migrations,
+REST contract smoke-tested (create → RECEIVED → QUEUED → DISPATCHED → SUCCEEDED,
+auth, validation envelopes, 404s, `/health`, `/api/v1/status`).
 **Oracle:** Java Spring Boot Equalix at the SHA recorded in [`docs/spec.md`](docs/spec.md) §13 (see the oracle determination entry).
 **Family baseline:** [equalix](https://github.com/synanton/equalix) (Spring Boot), [equalix-go](https://github.com/synanton/equalix-go) (Go).
 
