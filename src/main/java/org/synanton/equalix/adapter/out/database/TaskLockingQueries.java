@@ -38,6 +38,7 @@ public class TaskLockingQueries {
                         :maxPerClient IS NULL
                      OR cc.in_flight_count < :maxPerClient
                      OR cc.in_flight_count IS NULL
+                     OR t.priority <= 0
                   )
                 ORDER BY t.priority ASC NULLS LAST, t.created_at ASC, t.id ASC
                 LIMIT :limit
@@ -61,6 +62,7 @@ public class TaskLockingQueries {
                         :maxPerClient IS NULL
                      OR cc.in_flight_count < :maxPerClient
                      OR cc.in_flight_count IS NULL
+                     OR t.priority <= 0
                   )
                 ORDER BY t.created_at ASC, t.id ASC
                 LIMIT :limit

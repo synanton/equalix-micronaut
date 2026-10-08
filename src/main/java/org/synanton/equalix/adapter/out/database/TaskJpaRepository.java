@@ -57,7 +57,8 @@ public interface TaskJpaRepository extends GenericRepository<TaskEntity, UUID> {
         """)
     List<TaskEntity> findTasksWaitingForPreviousResult(TaskStatus status);
 
-    @Query("UPDATE TaskEntity t SET t.status = :newStatus, t.updatedAt = CURRENT_TIMESTAMP WHERE t.id IN :ids")
+    // updated_at is DB-assigned by trg_set_updated_at; no need to set it here.
+    @Query("UPDATE TaskEntity t SET t.status = :newStatus WHERE t.id IN :ids")
     int updateStatusBatch(List<UUID> ids, TaskStatus newStatus);
 
     @Query("""
