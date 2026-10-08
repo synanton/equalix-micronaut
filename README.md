@@ -17,12 +17,13 @@
 See [`docs/PORTING.md`](docs/PORTING.md) for the Spring→Micronaut mapping, the
 framework findings, and the intentional deviations.
 
-**State as of:** *(populated at first commit)* — full-parity port builds, 235/235
+**State as of:** `2b70128` (2026-10-07) — full-parity port builds, 235/235
 tests green (179 oracle unit tests verbatim + 4 Spring-coupled tests ported to
 Micronaut idioms), boots against PostgreSQL 16 with Flyway migrations,
 REST contract smoke-tested (create → RECEIVED → QUEUED → DISPATCHED → SUCCEEDED,
 auth, validation envelopes, 404s, `/health`, `/api/v1/status`).
-**Oracle:** Java Spring Boot Equalix at the SHA recorded in [`docs/spec.md`](docs/spec.md) §13 (see the oracle determination entry).
+**Oracle:** Spring Boot Equalix ([equalix](https://github.com/synanton/equalix));
+parity scope and deviations are tracked in [`docs/PORTING.md`](docs/PORTING.md).
 **Family baseline:** [equalix](https://github.com/synanton/equalix) (Spring Boot), [equalix-go](https://github.com/synanton/equalix-go) (Go).
 
 ---
@@ -110,9 +111,9 @@ The same hexagonal split as the other two implementations, expressed in Micronau
 **Constraints inherited from the family:**
 
 - **Same schema** — the migration set is the oracle's, byte-identical. Schema divergence would invalidate every comparison.
-- **Same REST contract** — [`docs/api.md`](docs/api.md) from the oracle repo describes the endpoints; the Micronaut implementation serves the same paths, bodies, and status codes.
+- **Same REST contract** — the oracle's [API reference](https://github.com/synanton/equalix/blob/main/docs/api-reference.md) describes the endpoints; the Micronaut implementation serves the same paths, bodies, and status codes.
 - **Same executor protocol** — `POST /tasks/{id}/execute` out, `POST /api/v1/tasks/{id}/complete` back. Same shape as the other two.
-- **Same domain semantics** — the virtual-time formula, priority calculation, CMS behavior, adaptive RPS, watchdog, and timeout sweep follow the spec ([`docs/spec.md`](docs/spec.md) §13) without reinterpretation. Where Micronaut idioms differ from Spring idioms, the *behavior* is what's preserved.
+- **Same domain semantics** — the virtual-time formula, priority calculation, CMS behavior, adaptive RPS, watchdog, and timeout sweep follow the oracle without reinterpretation (see [`docs/PORTING.md`](docs/PORTING.md)). Where Micronaut idioms differ from Spring idioms, the *behavior* is what's preserved.
 
 ---
 
@@ -200,21 +201,21 @@ They differ in:
 
 | Area | Implemented | Tested | Conformance-validated | Benchmark-validated | Differentially validated vs. Spring Boot |
 |---|---|---|---|---|---|
-| Domain core | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| PostgreSQL adapter | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| HTTP surface | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Jobs (dispatcher, calculator, watchdog, timeout) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Adaptive RPS | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Container image | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Startup profile | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Domain core | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
+| PostgreSQL adapter | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
+| HTTP surface | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
+| Jobs (dispatcher, calculator, watchdog, timeout) | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
+| Adaptive RPS | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
+| Container image | ✅ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Startup profile | ✅ | ⬜ | ⬜ | ⬜ | ⬜ |
 
-Rows flip on the same evidence thresholds the family uses: **✅** only when the corresponding artifact exists in `docs/evidence/`, **⬜** otherwise. Nothing is claimed without a committed citation.
+Rows flip on the same evidence thresholds the family uses: **✅** only when the corresponding artifact exists in `docs/evidence/`, **⬜** otherwise. `Implemented` is ✅ where the code exists and builds; `Tested` is ✅ where unit + integration suites run green (235/235). Characterization evidence (`char-01`…`char-04`) is measured data, not a validation gate — the validation columns stay ⬜ until the family signs them off.
 
 ---
 
 ## Roadmap
 
-See [`docs/implementation.md`](docs/implementation.md) for the phased plan. The family's phase numbering continues from `equalix-go`'s EQLX-0 through EQLX-7:
+See the phase list below; per-repo scope notes live in [`docs/PORTING.md`](docs/PORTING.md). The family's phase numbering continues from `equalix-go`'s EQLX-0 through EQLX-7:
 
 Phases are shared across the family — phase as stage, never as lockstep. The list below is the same stages, with this repo's per-phase scope differing: Phase 0 here is trivial (spec reuse, not re-extraction — one commit), Phase 1 domain core is a full rebuild (different language, same semantics), and Phase 5 differential is the first non-scaffolding phase (everything before it exists to enable the comparison). Do not read equal effort across repos from shared numbers.
 
@@ -258,7 +259,7 @@ Same discipline as the rest of the family:
 
 - Conventional commits with phase scope
 - `EQLX-` branch prefix (shared across the family)
-- Training gate (craft) and production gate (evidence) — see [`CONTRIBUTING.md`](https://contributing.md/)
+- Training gate (craft) and production gate (evidence) — same discipline as the [oracle's guidelines](https://github.com/synanton/equalix/blob/main/CONTRIBUTING.md)
 - Freshness marker bumps on phase transitions only
 - DECISION / CORRECTION / NOTE taxonomy for spec §13 entries
 
@@ -283,16 +284,3 @@ Apache License 2.0. See [`LICENSE`](https://license/).
 ## Acknowledgments
 
 Third implementation in the Equalix family. Oracle: [equalix](https://github.com/synanton/equalix) (Spring Boot). Sibling: [equalix-go](https://github.com/synanton/equalix-go).
-
----
-
-Two things to flag before this goes up as written.
-
-**The freshness marker is unfilled.** The block reads `*(populated at first commit)*` and needs an actual SHA + date before the README is honest. The pattern from the family is `State as of: <SHA> (date) — <phase state>` with the oracle SHA on a second line. Populate when the first commit lands — don't ship the marker with the placeholder in it, because the whole point of the marker is to be a specific, checkable reference.
-
-**Phase numbering.** I wrote "continues from `equalix-go`'s EQLX-0 through EQLX-7" and then listed a fresh Phase 0 through 7 for this repo. Two options:
-
-1. **Shared phase numbers across the family** — phase N means the same conceptual stage in every repo. EQLX-0 is spec extraction everywhere, even if Micronaut's EQLX-0 is a single commit that reads and reuses the existing spec. Cleaner conceptually; the branch prefix `EQLX-N-...` stays coherent across repos.
-2. **Per-repo phase numbers** — each repo counts from its own zero. Simpler mechanically, but `EQLX-3` means different things in different repos, and status updates have to disambiguate.
-
-I'd lean toward (1) — shared phase numbers. The family is one conceptual project with three implementations; the phase labels should be too. But it depends on whether you want to keep `equalix-go`'s already-shipped phase history as the canonical numbering or start fresh. Worth deciding before the first `EQLX-` branch in this repo, because it's cheap now and expensive to change later.

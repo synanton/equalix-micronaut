@@ -2,8 +2,9 @@
 
 Scope: full-parity port of `equalix` (Spring Boot 3.5, Java 21) to Micronaut 4.x.
 Package `org.synanton.equalix` kept identical so files diff cleanly against the oracle.
-Migrations under `src/main/resources/db/migration/` are byte-identical to the oracle —
-schema divergence would invalidate every comparison.
+The migration set is the oracle's squashed `V1__baseline.sql`, byte-identical —
+schema divergence would invalidate every comparison. (Micronaut validates against it
+via `hbm2ddl.auto: validate`, the counterpart of the oracle's `ddl-auto: validate`.)
 
 Verified so far: `mvn test` 235/235 green — the 179 oracle unit tests that don't need Spring/Testcontainers (copied verbatim),
 4 Spring-coupled tests ported to Micronaut idioms (see below), and all 12 oracle
@@ -95,8 +96,9 @@ envelopes, 404s, `/health`, `/api/v1/status`).
 - **Env vars renamed to neutral `EQUALIX_*`** (`EQUALIX_JDBC_URL`, `EQUALIX_DB_USER`,
   `EQUALIX_DB_PASSWORD`, `EQUALIX_API_KEY`, `KAFKA_BOOTSTRAP_SERVERS` kept). Same
   defaults as the oracle; see `docker-compose.yml`.
-- **No ShedLock** (see table). The V2 `shedlock` table migration is still applied.
-- **No KafkaHEADS UP in default compose** — app runs without a broker; set
+- **No ShedLock** (see table). The `shedlock` table ships in the `V1__baseline.sql`
+  schema for future use; no lock is taken.
+- **No Kafka in default compose** — app runs without a broker; set
   `KAFKA_BOOTSTRAP_SERVERS` to wire one.
 - Management paths are Micronaut's (`/health`, `/info`, `/prometheus`) rather than
   `/actuator/*`; only `/health`, `/info` are public, same policy as the oracle.
@@ -117,11 +119,19 @@ values, so per-class overrides live in the provider map; untyped NULL query para
 need explicit types for PostgreSQL (`FOR UPDATE` readers and multi-column natives
 already bypass Micronaut Data via `TaskLockingQueries`).
 
-## Not yet ported (for the comparison phase)
+## Comparison phase (EQLX-7)
 
-- Differential harness / benchmarks: characterization first (pairwise), not an
-  N-way differential — see below.
+Characterization evidence lives in `docs/evidence/` (`char-01` image startup,
+`char-02` warm RSS, `char-03` GC/latency, `char-04` RPS ceiling); the family matrix
+with cited numbers is canonical at the family level (see README). Remaining for
+a later pass:
+
+- N-way differential harness (pairwise characterization first — see below).
 - `Dockerfile` is JVM-based; GraalVM native-image is a possible fourth column later.
+
+Gate: no parity claim on sustained-concurrency runs until arbitrated against the Go
+differential stub (the JDK HTTP-client empty-response edge above is a known
+port-introduced difference under concurrency).
 
 ## Test-driven main-code accommodations (reachability audit)
 
@@ -165,4 +175,6 @@ reachable that wasn't before):
   contract — the harness normalizes per side.
 - **Multi-instance is named out for Micronaut** (no ShedLock coordination).
   Single-instance rows are unaffected; any cross-instance comparison row excludes
-  this column until locking lands.
+  this column until locking lands. Conversely, do not measure the oracle's
+  multi-instance scaling against this port — without coordination the Micronaut
+  side would double-run every scheduler while the oracle coordinates.
