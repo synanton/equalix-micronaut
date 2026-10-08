@@ -1,0 +1,22 @@
+[book]
+title = "Equalix Micronaut Developer Documentation"
+authors = ["Andrei Minin"]
+description = "Developer guide, architecture, API and samples for the Equalix fair scheduler — Micronaut port"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[preprocessor.katex]
+after = ["links"]
+
+[output.html]
+site-url = "/equalix-micronaut/"
+git-repository-url = "https://github.com/synanton/equalix-micronaut"
+edit-url-template = "https://github.com/synanton/equalix-micronaut/edit/main/docs/{path}"
+default-theme = "light"
+preferred-dark-theme = "navy"
+
+[output.html.fold]
+enable = true
