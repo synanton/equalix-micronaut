@@ -6,7 +6,7 @@ The migration set is the oracle's squashed `V1__baseline.sql`, byte-identical �
 schema divergence would invalidate every comparison. (Micronaut validates against it
 via `hbm2ddl.auto: validate`, the counterpart of the oracle's `ddl-auto: validate`.)
 
-Verified so far: `mvn test` 235/235 green — the 179 oracle unit tests that don't need Spring/Testcontainers (copied verbatim),
+Verified so far: `mvn test` 237/237 green — the 179 oracle unit tests that don't need Spring/Testcontainers (copied verbatim),
 4 Spring-coupled tests ported to Micronaut idioms (see below), and all 12 oracle
 integration tests ported to Micronaut Test + Testcontainers (see below); app boots against PostgreSQL 16, Flyway migrates,
 all schedulers tick; REST contract smoke-tested end to end
@@ -90,6 +90,14 @@ envelopes, 404s, `/health`, `/api/v1/status`).
    (ISO-8601 `Instant`s).
 8. **Disable `kafka.health.enabled`** when no broker is present, or `/health`
    fails (the consumer itself retries harmlessly, like the oracle).
+9. **Native locking reads may not see the same tick's promotion write.**
+   `promoteStarvedTasks` saves priority 0 and the tick's `FOR UPDATE …
+   SKIP LOCKED` select runs in the same transaction; a native SELECT need
+   not observe the unflushed write, so a promoted task can dispatch one
+   tick later here while the oracle dispatches it the same tick. No
+   steady-state effect (the next tick converges), but
+   `StarvationBypassIntegrationTest` drives two ticks to stay
+   deterministic on both frameworks.
 
 ## Intentional deviations from the oracle
 
