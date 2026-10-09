@@ -17,9 +17,10 @@
 See [`docs/PORTING.md`](docs/PORTING.md) for the Spring→Micronaut mapping, the
 framework findings, and the intentional deviations.
 
-**State as of:** `2b70128` (2026-10-07) — full-parity port builds, 235/235
+**State as of:** `78eabf2` (2026-10-08) — full-parity port builds, 237/237
 tests green (179 oracle unit tests verbatim + 4 Spring-coupled tests ported to
-Micronaut idioms), boots against PostgreSQL 16 with Flyway migrations,
+Micronaut idioms, plus starvation-bypass parity tests), boots against
+PostgreSQL 16 with Flyway migrations,
 REST contract smoke-tested (create → RECEIVED → QUEUED → DISPATCHED → SUCCEEDED,
 auth, validation envelopes, 404s, `/health`, `/api/v1/status`).
 **Oracle:** Spring Boot Equalix ([equalix](https://github.com/synanton/equalix));
@@ -201,15 +202,68 @@ They differ in:
 
 | Area | Implemented | Tested | Conformance-validated | Benchmark-validated | Differentially validated vs. Spring Boot |
 |---|---|---|---|---|---|
-| Domain core | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| PostgreSQL adapter | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| HTTP surface | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| Jobs (dispatcher, calculator, watchdog, timeout) | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| Adaptive RPS | ✅ | ✅ | ⬜ | ⬜ | ⬜ |
-| Container image | ✅ | ⬜ | ⬜ | ⬜ | ⬜ |
-| Startup profile | ✅ | ⬜ | ⬜ | ⬜ | ⬜ |
+| Domain core | ✅ | ✅ | ✅ (1:2:7 shares, virtual time) | ✅ (dispatch path at parity, char-03/04) | ✅ jmn + gomn warm-class shares |
+| PostgreSQL adapter | ✅ | ✅ | ✅ (same suites) | ⬜ | ✅ warm-class (same runs) |
+| HTTP surface | ✅ | ✅ | ✅ (`TaskIngestionIntegrationTest` end-to-end; envelope/validation unit tests) | ⬜ | ✅ warm-class (same runs) |
+| Jobs (dispatcher, calculator, watchdog, timeout) | ✅ | ✅ | ✅ (fairness suites drive the real jobs) | ⬜ | ✅ warm-class (same runs) |
+| Adaptive RPS | ✅ | ✅ | ⬜ | ⬜ | ✅ warm-class (same runs; endpoint convergence char-02) |
+| Container image | ✅ | ⬜ | ⬜ | ✅ (char-01: 386 vs 416 MB) | ⬜ |
+| Startup profile | ✅ | ⬜ | ⬜ | ✅ (char-01: 3.21 vs 5.18 s spawn→serving) | ⬜ (recorded, never gated) |
 
-Rows flip on the same evidence thresholds the family uses: **✅** only when the corresponding artifact exists in `docs/evidence/`, **⬜** otherwise. `Implemented` is ✅ where the code exists and builds; `Tested` is ✅ where unit + integration suites run green (235/235). Characterization evidence (`char-01`…`char-04`) is measured data, not a validation gate — the validation columns stay ⬜ until the family signs them off.
+`⬜` = not yet; nothing here is claimed before its evidence exists — same rule as the
+[Go maturity table](https://github.com/synanton/equalix-go#maturity).
+`Implemented` is ✅ where the code exists and builds; `Tested` is ✅ where unit +
+integration suites run green. Test counts below are re-verified on every change touching
+`src/`; validation columns cite committed artifacts only.
+
+### Conformance (Testcontainers PostgreSQL, scheduling off, jobs driven explicitly)
+
+- `ProportionalFairnessIntegrationTest` — weights 1:2:7 continuously backlogged over
+  10,000 dispatches: every tenant within 2 tasks of its weighted share in every
+  window (`ε_max ≤ 2/|W|`, prefix + sliding, `W ∈ {10, 25, 100, 1000, 10000}`).
+- `HierarchicalFairnessIntegrationTest` — per-level shares, node virtual-time
+  charges, idle-restart floors.
+- `VirtualTimeIntegrationTest` — finish-tag assignment and system virtual time.
+- `StarvationBypassIntegrationTest` + `shouldServePromotedTasksBeyondQuota` —
+  CORRECTION-7 backstop, flat and hierarchical.
+
+### Benchmark (characterization, `docs/evidence/char-0*`, 2026-10-07, n=2 unless noted)
+
+- char-01 — image 386 vs 416 MB; spawn→serving 3.21 vs 5.18 s; first dispatch
+  identical within noise (0.37 vs 0.40 s, tick-dominated).
+- char-02 — warm RSS under load ≈680 vs ≈816 MiB (−17%); ready/idle within noise.
+  n=2 establishes harness + shape, not a citable delta.
+- char-03 — GC/latency null result: end-to-end p99 bands overlap, G1 paused time
+  <0.15% on both sides. GC is not where Micronaut wins.
+- char-04 — RPS ceiling equal (~75/s, DB-bound), time-to-ceiling equal within noise.
+
+Convergent story (also the [family comparison](https://github.com/synanton/.github/blob/main/profile/experiments/equalix-family-comparison.md)):
+AOT's advantage is bounded to cold start and image size — nowhere in sustained
+runtime behavior measured so far.
+
+### Differentially validated vs Spring Boot
+
+Differential evidence lives in `equalix-go` and is cited here by repo + path, never
+copied ([methodology](https://github.com/synanton/equalix-go/blob/main/docs/differential-methodology.md),
+[runs](https://github.com/synanton/equalix-go/blob/main/docs/evidence/threeway/README.md)).
+Pairs involving this implementation (2026-10-07, workload `w2000.jsonl`
+`68741187…9546`, 100 ms stub, warm class throughout):
+
+| Pair | Claim | Status |
+|---|---|---|
+| Spring-vs-Micronaut | Direct port preserves oracle semantics across seams | pass, no mismatch |
+| Go-vs-Micronaut | Cross-runtime agreement (not independent convergence) | pass, no mismatch |
+
+Gates: warm-class shares (±2/1000-window); dispatch order diagnostic only (flaky by
+construction); stuck sends excluded from gates, reported per side with the client
+stack named; seams-checked, not assumed (per-tick batch sizes 4.3 vs 4.2, p99 tick
+149 vs 140 ms, commit-race rejects 0/0 both sides).
+Pinned SHAs: Spring `11ef025e`, MN `b12176c0`, Go `f8a2a21e`.
+Post-pin delta (CORRECTION-7 bypass on all three sides + schema squash): proven
+no-op on the gate workload (`promoted = 0` in every recorded trace), so the pass
+verdicts transfer to current HEADs; the bypass path itself is covered by the
+conformance tests above. A re-run at current SHAs is the remaining sign-off —
+full analysis in the [three-way addendum](https://github.com/synanton/equalix-go/blob/main/docs/evidence/threeway/README.md#post-run-deltas-addendum-2026-10-09).
 
 ---
 
@@ -274,6 +328,12 @@ Go ([equalix-go](https://github.com/synanton/equalix-go)), and Micronaut
 
 Startup, footprint and runtime characterization across all three:
 [**Equalix family comparison →**](https://github.com/synanton/.github/blob/main/profile/experiments/equalix-family-comparison.md).
+
+Published developer books:
+[Equalix](https://synanton.github.io/equalix/) (the oracle),
+[equalix-go](https://synanton.github.io/equalix-go/).
+Three-way differential evidence (all pairs, pinned SHAs, transfer addendum):
+[equalix-go `docs/evidence/threeway/`](https://github.com/synanton/equalix-go/tree/main/docs/evidence/threeway/).
 
 ## License
 
