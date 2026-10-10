@@ -106,7 +106,13 @@ public abstract class BaseIntegrationTest {
             Map.entry("app.hierarchical.separator", "/"),
             Map.entry("app.hierarchical.metrics-depth", "1"),
             Map.entry("app.watchdog.interval-minutes", "60"),
-            Map.entry("app.watchdog.drift-metric-max-keys", "100"));
+            Map.entry("app.watchdog.drift-metric-max-keys", "100"),
+            // Small pools: every test class with distinct properties holds its own cached
+            // context (and pool) for the whole JVM run; 10-connection defaults exhaust the
+            // container's max_connections once ~10 contexts accumulate. Tests are
+            // single-threaded — 3 connections each is plenty.
+            Map.entry("datasources.default.maximum-pool-size", "3"),
+            Map.entry("datasources.default.minimum-idle", "1"));
     }
 
     @MockBean(RemoteExecutorPort.class)

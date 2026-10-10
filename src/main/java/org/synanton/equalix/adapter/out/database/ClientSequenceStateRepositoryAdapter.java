@@ -37,16 +37,21 @@ public class ClientSequenceStateRepositoryAdapter implements ClientSequenceState
 
     @Override
     public ClientSequenceState findOrCreate(String fairnessKey) {
-        return jpaRepository.findById(fairnessKey)
-            .map(this::toDomain)
-            .orElseGet(() -> {
-                ClientSequenceStateEntity entity = new ClientSequenceStateEntity()
-                    .setFairnessKey(fairnessKey)
-                    .setLastCompletedSequence(0L)
-                    .setLastDispatchedSequence(0L)
-                    .setBlocked(false);
-                return toDomain(mergedSave(entity));
-            });
+        // Single-statement find-or-create (no SELECT-then-INSERT round-trip). Requires an
+        // active transaction — all callers (ingestion, sequential completion, timeout sweep)
+        // run inside one.
+        ClientSequenceStateEntity entity = sessionFactory.getCurrentSession()
+            .createNativeQuery("""
+                INSERT INTO client_sequence_state
+                    (fairness_key, last_completed_sequence, last_dispatched_sequence, is_blocked,
+                     updated_at)
+                VALUES (:key, 0, 0, false, now())
+                ON CONFLICT (fairness_key) DO UPDATE SET fairness_key = EXCLUDED.fairness_key
+                RETURNING *
+                """, ClientSequenceStateEntity.class)
+            .setParameter("key", fairnessKey)
+            .getSingleResult();
+        return toDomain(entity);
     }
 
     @Override

@@ -20,6 +20,6 @@ public class SequentialDispatcherScheduler {
 
     @Scheduled(fixedDelay = "${app.queue.sequential.dispatcher-interval:50}ms")
     public void run() {
-        sequentialDispatcherService.dispatch();
+        TransientRetry.run("sequentialDispatcher", sequentialDispatcherService::dispatch);
     }
 }

@@ -2,6 +2,7 @@ package org.synanton.equalix.adapter.out.database;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -44,6 +45,20 @@ public class TaskRepositoryAdapter implements TaskRepositoryPort {
         // one transaction). Merge explicitly to preserve the oracle semantics.
         try {
             return toDomain(sessionFactory.getCurrentSession().merge(toEntity(task)));
+        } catch (HibernateException ex) {
+            return toDomain(jpaRepository.save(toEntity(task)));
+        }
+    }
+
+    @Override
+    public Task insert(Task task) {
+        // Single persist for new rows: the session merge above (and Micronaut Data's
+        // save()) both pay an existence SELECT for assigned IDs. Requires an active
+        // transaction — all callers (ingestion) run inside one.
+        try {
+            TaskEntity entity = toEntity(task);
+            sessionFactory.getCurrentSession().persist(entity);
+            return toDomain(entity);
         } catch (HibernateException ex) {
             return toDomain(jpaRepository.save(toEntity(task)));
         }
@@ -130,6 +145,45 @@ public class TaskRepositoryAdapter implements TaskRepositoryPort {
     @Override
     public int updateStatusBatch(List<UUID> ids, TaskStatus newStatus) {
         return jpaRepository.updateStatusBatch(ids, newStatus);
+    }
+
+    @Override
+    public int bulkMarkDispatched(List<UUID> ids) {
+        if (ids.isEmpty()) {
+            return 0;
+        }
+        return jpaRepository.bulkMarkDispatched(ids);
+    }
+
+    @Override
+    public boolean markDispatched(UUID id, @Nullable byte[] previousResult) {
+        return jpaRepository.markDispatched(id, previousResult) > 0;
+    }
+
+    @Override
+    public void markQueued(UUID id, long priority, @Nullable Double virtualFinish) {
+        jpaRepository.markQueued(id, priority, virtualFinish);
+    }
+
+    @Override
+    public boolean completeTask(UUID id, long version, TaskStatus status, @Nullable byte[] result,
+        @Nullable String error, Instant completedAt) {
+        return jpaRepository.completeTask(id, version, status.name(), result, error, completedAt) > 0;
+    }
+
+    @Override
+    public boolean markCommitted(UUID id) {
+        return jpaRepository.markCommitted(id) > 0;
+    }
+
+    @Override
+    public boolean markTimeout(UUID id, long version, String error, Instant completedAt) {
+        return jpaRepository.markTimeout(id, version, error, completedAt) > 0;
+    }
+
+    @Override
+    public int bulkPromoteStarvedTasks(long olderThanMs, int limit) {
+        return jpaRepository.bulkPromoteStarvedTasks(olderThanMs, limit);
     }
 
     @Override

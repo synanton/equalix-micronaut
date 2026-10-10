@@ -1,9 +1,9 @@
 package org.synanton.equalix.domain.service;
 
 import java.time.Clock;
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import jakarta.inject.Singleton;
 import jakarta.inject.Inject;
@@ -11,6 +11,7 @@ import io.micronaut.transaction.annotation.Transactional;
 import org.synanton.equalix.domain.model.ClientSequenceState;
 import org.synanton.equalix.domain.model.Task;
 import org.synanton.equalix.domain.model.TaskStatus;
+import org.synanton.equalix.domain.port.out.AfterCommitPort;
 import org.synanton.equalix.domain.port.out.CMSProviderPort;
 import org.synanton.equalix.domain.port.out.ClientCountsRepositoryPort;
 import org.synanton.equalix.domain.port.out.ClientSequenceStateRepositoryPort;
@@ -23,7 +24,7 @@ import org.synanton.equalix.domain.port.out.TaskRepositoryPort;
 public class SequentialDispatcherService {
 
     @Inject
-    public SequentialDispatcherService(TaskRepositoryPort taskRepository, ClientSequenceStateRepositoryPort sequenceStateRepository, CMSProviderPort cms, ClientCountsRepositoryPort clientCounts, RemoteExecutorPort remoteExecutor, VirtualTimeService virtualTimeService, HierarchicalDispatchPlanner hierarchicalDispatchPlanner, Clock clock) {
+    public SequentialDispatcherService(TaskRepositoryPort taskRepository, ClientSequenceStateRepositoryPort sequenceStateRepository, CMSProviderPort cms, ClientCountsRepositoryPort clientCounts, RemoteExecutorPort remoteExecutor, VirtualTimeService virtualTimeService, HierarchicalDispatchPlanner hierarchicalDispatchPlanner, AfterCommitPort afterCommit, Clock clock) {
         this.taskRepository = taskRepository;
         this.sequenceStateRepository = sequenceStateRepository;
         this.cms = cms;
@@ -31,6 +32,7 @@ public class SequentialDispatcherService {
         this.remoteExecutor = remoteExecutor;
         this.virtualTimeService = virtualTimeService;
         this.hierarchicalDispatchPlanner = hierarchicalDispatchPlanner;
+        this.afterCommit = afterCommit;
         this.clock = clock;
     }
 
@@ -41,6 +43,7 @@ public class SequentialDispatcherService {
     private final RemoteExecutorPort remoteExecutor;
     private final VirtualTimeService virtualTimeService;
     private final HierarchicalDispatchPlanner hierarchicalDispatchPlanner;
+    private final AfterCommitPort afterCommit;
     private final Clock clock;
 
     @Transactional
@@ -76,9 +79,12 @@ public class SequentialDispatcherService {
             nextTask.setPreviousResult(previousResult);
         }
 
-        Instant now = Instant.now(clock);
-        nextTask.setStatus(TaskStatus.DISPATCHED);
-        taskRepository.save(nextTask);
+        // Targeted UPDATE (no merge round-trip); a concurrent transition yields false
+        // and the tick is skipped — the next tick reconsiders the key.
+        if (!taskRepository.markDispatched(nextTask.getId(), nextTask.getPreviousResult())) {
+            log.debug("Sequential task {} moved concurrently, skipping dispatch", nextTask.getId());
+            return;
+        }
 
         state.setCurrentExecutingTaskId(nextTask.getId())
             .setLastDispatchedSequence(nextTask.getSequenceNumber() != null ? nextTask.getSequenceNumber() : 0L);
@@ -86,9 +92,15 @@ public class SequentialDispatcherService {
 
         cms.add(state.getFairnessKey(), 1);
         clientCounts.incrementInFlight(state.getFairnessKey());
-        remoteExecutor.send(nextTask.getId(), nextTask.getPayload(), previousResult);
         virtualTimeService.recordDispatch(List.of(nextTask));
         hierarchicalDispatchPlanner.recordSequentialDispatch(nextTask);
+
+        // After commit, like the flat dispatcher (P1): a rolled-back tick must not send.
+        // Registered after the accounting above so a throwing executor cannot skip it.
+        UUID taskId = nextTask.getId();
+        byte[] payload = nextTask.getPayload();
+        final byte[] attachedResult = previousResult;
+        afterCommit.afterCommit(() -> remoteExecutor.send(taskId, payload, attachedResult));
 
         log.debug("Dispatched sequential task {} seq={} for client {}",
             nextTask.getId(), nextTask.getSequenceNumber(), state.getFairnessKey());
