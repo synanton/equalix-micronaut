@@ -8,7 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.hibernate.HibernateException;
 import org.hibernate.Session;
 import org.hibernate.SessionFactory;
-import org.hibernate.engine.spi.SessionImplementor;
+import org.synanton.equalix.adapter.out.database.SessionCallbacks;
 import org.synanton.equalix.domain.port.out.CMSProviderPort;
 
 /**
@@ -94,7 +94,7 @@ public class TransactionAwareCmsProvider implements CMSProviderPort {
             }
             Map<String, Long> deltas = new LinkedHashMap<>();
             buffers.put(session, deltas);
-            ActionQueueRegistrar.register(session, () -> {
+            SessionCallbacks.register(session, () -> {
                 Map<String, Long> pending;
                 synchronized (buffers) {
                     pending = buffers.remove(session);
@@ -124,21 +124,5 @@ public class TransactionAwareCmsProvider implements CMSProviderPort {
                     exception.getMessage());
             }
         });
-    }
-
-    /** Registers commit/rollback callbacks on the session's action queue (Hibernate 6 SPI). */
-    private static final class ActionQueueRegistrar {
-        private ActionQueueRegistrar() {
-        }
-
-        static void register(Session session, Runnable onCommit, Runnable onRollback) {
-            ((SessionImplementor) session).getActionQueue().registerProcess((success, completionSession) -> {
-                if (success) {
-                    onCommit.run();
-                } else {
-                    onRollback.run();
-                }
-            });
-        }
     }
 }

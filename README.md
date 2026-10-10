@@ -17,9 +17,9 @@
 See [`docs/PORTING.md`](docs/PORTING.md) for the Spring→Micronaut mapping, the
 framework findings, and the intentional deviations.
 
-**State as of:** `78eabf2` (2026-10-08) — full-parity port builds, 237/237
+**State as of:** `78eabf2` (2026-10-08) — full-parity port builds, 250/250
 tests green (179 oracle unit tests verbatim + 4 Spring-coupled tests ported to
-Micronaut idioms, plus starvation-bypass parity tests), boots against
+Micronaut idioms, plus starvation-bypass, write-path and concurrency parity tests), boots against
 PostgreSQL 16 with Flyway migrations,
 REST contract smoke-tested (create → RECEIVED → QUEUED → DISPATCHED → SUCCEEDED,
 auth, validation envelopes, 404s, `/health`, `/api/v1/status`).

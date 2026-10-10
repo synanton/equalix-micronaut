@@ -6,7 +6,7 @@ The migration set is the oracle's squashed `V1__baseline.sql`, byte-identical �
 schema divergence would invalidate every comparison. (Micronaut validates against it
 via `hbm2ddl.auto: validate`, the counterpart of the oracle's `ddl-auto: validate`.)
 
-Verified so far: `mvn test` 237/237 green — the 179 oracle unit tests that don't need Spring/Testcontainers (copied verbatim),
+Verified so far: `mvn test` 250/250 green — the 179 oracle unit tests that don't need Spring/Testcontainers (copied verbatim),
 4 Spring-coupled tests ported to Micronaut idioms (see below), and all 12 oracle
 integration tests ported to Micronaut Test + Testcontainers (see below); app boots against PostgreSQL 16, Flyway migrates,
 all schedulers tick; REST contract smoke-tested end to end
@@ -110,6 +110,97 @@ envelopes, 404s, `/health`, `/api/v1/status`).
   `KAFKA_BOOTSTRAP_SERVERS` to wire one.
 - Management paths are Micronaut's (`/health`, `/info`, `/prometheus`) rather than
   `/actuator/*`; only `/health`, `/info` are public, same policy as the oracle.
+
+## Write-path optimizations (oracle O1–O3, O6 ported)
+
+Same changes as the oracle's `perf/db-load-reduction` branch, same semantics:
+bulk dispatch UPDATE, targeted queue/ack/completion/timeout UPDATEs with in-statement
+guards, bulk starvation promotion, per-key batched `client_counts` increments, and
+single-statement sequence-state `findOrCreate` (session native query with
+`RETURNING *`, same execution path as `TaskLockingQueries` — Micronaut Data's query
+parser is not involved).
+
+Deliberate port differences from the oracle's patch:
+
+- **No `insert()` path (already optimal).** The oracle added `persist()`-based ingest
+  because Spring Data's merge costs a SELECT-miss per new row (800 stmts/400 tasks).
+  Micronaut Data `save()` persists new rows directly — measured 400/400 before the
+  patch — so the port keeps its save path for ingest.
+- **The `@Transactional` on `createTask` (needed by the session-native `findOrCreate`
+  upsert) silently rerouted ingest from Data `persist()` to session `merge()`** —
+  a `select … where id=?` appeared before every INSERT (800/400, caught by the
+  benchmark, invisible without statement counting). Fixed with an explicit
+  `insert()` (session `persist`, same single statement) on the port; `createTask`
+  keeps the atomic ingest-plus-bootstrap transaction.
+- **O4 does not apply.** There is no ShedLock here to gate — single-instance runs
+  no lock traffic by construction. Multi-instance still needs locking first.
+- **`@Transactional` on `createTask`.** The session-native `findOrCreate` needs a
+  transaction-bound session; the use case previously ran without one (each repository
+  call in its own transaction). Now task insert + sequence bootstrap commit atomically.
+- **Null parameters need `@Nullable`.** Micronaut Data rejects null query arguments
+  unless declared nullable (`completeTask` with null result/error failed at runtime,
+  not compile time). `io.micronaut.core.annotation.Nullable` on the repository
+  parameters; the domain ports already carry jspecify `@Nullable`.
+- **Test pools capped.** Every test class with distinct properties holds its own cached
+  context (and pool) for the JVM run; 10-connection defaults exhaust the container's
+  `max_connections` past ~10 contexts. `BaseIntegrationTest` sets max 3 / min-idle 1;
+  single-threaded tests never notice.
+
+Measured on the ported `DbLoadBenchmarkTest` (400 tasks, single tenant; exact counts
+via a counting-`DataSource` `@Replaces` bean — a `BeanCreatedEventListener` attempt
+first sent DataSource creation into a 23-pool spiral, see findings):
+
+| Phase (400 tasks) | Before (stmts) | After (stmts) | Before (wall) | After (wall) |
+|---|---|---|---|---|
+| Ingest | 400 | 400 | 510–625 ms | 620–700 ms |
+| Priority calc | 804 | 804 | 635–830 ms | 1076–1177 ms, host noise (zero count delta) |
+| Dispatch | 805 | 7 | 608–720 ms | 118–124 ms |
+| Executor ack | 800 | 400 | 356–410 ms | 186–285 ms |
+| Completion | 1600 | 1200 | 517–573 ms | 575–655 ms, within noise (−25% counts) |
+| **Total** | **4409** | **2811 (−36%)** | **~2.7–3.0 s** | **~2.7–2.8 s** |
+
+Same conclusions as the oracle: dispatch (−99% statements) and ack (−50%) far outside
+noise; calc unchanged in counts (merge on managed entities was already UPDATE-only);
+totals agree with the counts while wall-clock totals sit inside host noise on this
+workload. The per-statement cost here is higher than the oracle's (Data interceptors,
+null validation), so the dispatch wall win is ~5× vs the oracle's ~13× for the same
+statement cut.
+
+## Concurrency hardening (oracle P1 mirror)
+
+Same three fixes, port-shaped: deterministic lock order (sorted bulk ids, `TreeMap`
+counts/virtual-time/hierarchy charges), executor sends deferred past commit, bounded
+scheduler retry. Two port differences:
+
+- **No Spring synchronization manager — new `AfterCommitPort`.** The oracle hooks
+  `TransactionSynchronizationManager` directly in the service. The domain here cannot
+  touch Hibernate, and Micronaut 4 provides no equivalent manager, so the port
+  (`domain/port/out`, single `afterCommit(Runnable)` method) carries the seam and
+  `SessionAfterCommitAdapter` implements it over the shared `SessionCallbacks`
+  registrar extracted from `TransactionAwareCmsProvider` (one implementation, two
+  users). Outside a transaction the adapter runs the action immediately — unit tests
+  stub the port pass-through and keep their verifications unchanged.
+- **Lock failures surface as `LockAcquisitionException`** (deadlock 40P01 and lock
+  waits alike), so `TransientRetry` catches that instead of Spring's pessimistic-lock
+  hierarchy. Schedulers call it identically.
+- **A throwing after-commit hook surfaces wrapped** (`HibernateException: Unable to
+  perform afterTransactionCompletion callback`, root cause preserved) where the oracle
+  propagates it raw. Same contract (rows/counts/sketch agree, slot held), different
+  envelope — pinned in `CmsTransactionConsistencyIntegrationTest`.
+- **Ingest regression caught by the counter:** adding `@Transactional` to `createTask`
+  (required by the session-native `findOrCreate`) silently rerouted ingest from Data
+  `persist()` to session `merge()` — a SELECT-per-INSERT appeared (800/400). Fixed with
+  an explicit `insert()` (session `persist`), restoring 400/400 with the atomic
+  ingest-plus-bootstrap transaction kept.
+
+Pinned live by `DispatchConcurrencyIntegrationTest` (4 competing dispatchers:
+exactly-once sends, exact accounting, duplicate-completion and timeout-after-completion
+safety) and the multi-tenant benchmark leg below.
+
+Multi-tenant leg (10 tenants × 400 tasks, 4 racing dispatchers, plus 10 sequential
+tasks): **3121 statements, 7.6 stmts/task**, dispatch-latency p50 ≈ 730 ms / p95 ≈ 832 ms.
+Dispatch statements vary slightly with thread-dependent tick count (142 vs 160–164);
+per-task rate is stable.
 
 ## Integration tests (all 12 oracle files ported — no gap)
 

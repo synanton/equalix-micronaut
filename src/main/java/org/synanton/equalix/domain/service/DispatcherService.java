@@ -2,9 +2,11 @@ package org.synanton.equalix.domain.service;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 import lombok.extern.slf4j.Slf4j;
@@ -14,7 +16,7 @@ import io.micronaut.transaction.annotation.Transactional;
 import org.synanton.equalix.config.properties.AdaptiveRpsProperties;
 import org.synanton.equalix.config.properties.QueueProperties;
 import org.synanton.equalix.domain.model.Task;
-import org.synanton.equalix.domain.model.TaskStatus;
+import org.synanton.equalix.domain.port.out.AfterCommitPort;
 import org.synanton.equalix.domain.port.out.CMSProviderPort;
 import org.synanton.equalix.domain.port.out.ClientCountsRepositoryPort;
 import org.synanton.equalix.domain.port.out.RemoteExecutorPort;
@@ -26,7 +28,7 @@ import org.synanton.equalix.domain.port.out.TaskRepositoryPort;
 public class DispatcherService {
 
     @Inject
-    public DispatcherService(TaskRepositoryPort taskRepository, CMSProviderPort cms, ClientCountsRepositoryPort clientCounts, RemoteExecutorPort remoteExecutor, QueueProperties queueProperties, AdaptiveRpsController adaptiveRpsController, AdaptiveRpsProperties adaptiveRpsProperties, VirtualTimeService virtualTimeService, AgingService agingService, FairnessHierarchy fairnessHierarchy, HierarchicalDispatchPlanner hierarchicalDispatchPlanner, Clock clock) {
+    public DispatcherService(TaskRepositoryPort taskRepository, CMSProviderPort cms, ClientCountsRepositoryPort clientCounts, RemoteExecutorPort remoteExecutor, QueueProperties queueProperties, AdaptiveRpsController adaptiveRpsController, AdaptiveRpsProperties adaptiveRpsProperties, VirtualTimeService virtualTimeService, AgingService agingService, FairnessHierarchy fairnessHierarchy, HierarchicalDispatchPlanner hierarchicalDispatchPlanner, AfterCommitPort afterCommit, Clock clock) {
         this.taskRepository = taskRepository;
         this.cms = cms;
         this.clientCounts = clientCounts;
@@ -38,6 +40,7 @@ public class DispatcherService {
         this.agingService = agingService;
         this.fairnessHierarchy = fairnessHierarchy;
         this.hierarchicalDispatchPlanner = hierarchicalDispatchPlanner;
+        this.afterCommit = afterCommit;
         this.clock = clock;
     }
 
@@ -52,6 +55,7 @@ public class DispatcherService {
     private final AgingService agingService;
     private final FairnessHierarchy fairnessHierarchy;
     private final HierarchicalDispatchPlanner hierarchicalDispatchPlanner;
+    private final AfterCommitPort afterCommit;
     private final Clock clock;
 
     @Transactional
@@ -90,18 +94,33 @@ public class DispatcherService {
             return;
         }
 
-        for (Task task : tasks) {
-            task.setStatus(TaskStatus.DISPATCHED);
-            taskRepository.save(task);
-            cms.add(task.getFairnessKey(), 1);
-            clientCounts.incrementInFlight(task.getFairnessKey());
-            remoteExecutor.send(task.getId(), task.getPayload(), null);
+        // Single bulk UPDATE for the whole tick (the rows are locked by this transaction).
+        // Deterministic lock order (P1): sorted ids, then counts and virtual time in key
+        // order, so concurrent ticks block on each other but can never deadlock. Rowcount
+        // mismatch is unexpected under the locks; warn rather than silently dispatching
+        // tasks whose transition did not persist.
+        List<UUID> ids = tasks.stream().map(Task::getId).sorted().toList();
+        int marked = taskRepository.bulkMarkDispatched(ids);
+        if (marked != tasks.size()) {
+            log.warn("Dispatch transition persisted for {}/{} locked tasks", marked, tasks.size());
         }
+        Map<String, Integer> increments = new TreeMap<>();
+        for (Task task : tasks) {
+            increments.merge(task.getFairnessKey(), 1, Integer::sum);
+            cms.add(task.getFairnessKey(), 1);
+        }
+        increments.forEach(clientCounts::incrementInFlight);
         boolean aged = hierarchicalSelection == null && agingService.isEnabled();
         virtualTimeService.recordDispatch(tasks, task -> aged ? agingService.credit(task, now) : 0.0);
         if (hierarchicalSelection != null) {
             hierarchicalDispatchPlanner.recordDispatch(hierarchicalSelection);
         }
+        // Sends fire after commit, never inside the transaction: a rolled-back tick must
+        // not have sent anything the DB never dispatched. Registered last so a throwing
+        // executor cannot skip the accounting hooks above.
+        List<Task> confirmed = new ArrayList<>(tasks);
+        afterCommit.afterCommit(() -> confirmed.forEach(task ->
+            remoteExecutor.send(task.getId(), task.getPayload(), null)));
 
         log.debug("Dispatched {} tasks; global in-flight was {}", tasks.size(), globalInFlight);
     }
@@ -122,19 +141,12 @@ public class DispatcherService {
     }
 
     private void promoteStarvedTasks() {
-        List<Task> starved = taskRepository.findStarvedTasks(
+        // Single bulk UPDATE (no per-task load-modify-save); the rowcount feeds the log line.
+        int promoted = taskRepository.bulkPromoteStarvedTasks(
             queueProperties.getMaxQueuedTimeMs(),
             queueProperties.getWorkerPollSize());
-
-        if (starved.isEmpty()) {
-            return;
+        if (promoted > 0) {
+            log.warn("Promoted {} starved tasks to front of queue", promoted);
         }
-
-        for (Task task : starved) {
-            // Boost priority to zero to force this task to the front regardless of quota
-            task.setPriority(0L);
-            taskRepository.save(task);
-        }
-        log.warn("Promoted {} starved tasks to front of queue", starved.size());
     }
 }

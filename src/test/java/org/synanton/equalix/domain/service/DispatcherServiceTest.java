@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.ToDoubleFunction;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -24,6 +25,7 @@ import org.synanton.equalix.domain.model.AgingPolicy;
 import org.synanton.equalix.domain.model.FairnessMode;
 import org.synanton.equalix.domain.model.Task;
 import org.synanton.equalix.domain.model.TaskStatus;
+import org.synanton.equalix.domain.port.out.AfterCommitPort;
 import org.synanton.equalix.domain.port.out.CMSProviderPort;
 import org.synanton.equalix.domain.port.out.ClientCountsRepositoryPort;
 import org.synanton.equalix.domain.port.out.RemoteExecutorPort;
@@ -49,19 +51,30 @@ class DispatcherServiceTest {
     private VirtualTimeService virtualTimeService;
     @Mock
     private HierarchicalDispatchPlanner hierarchicalDispatchPlanner;
+    @Mock
+    private AfterCommitPort afterCommit;
 
     @InjectMocks
     private DispatcherService service;
+
+    @BeforeEach
+    void passThroughAfterCommit() {
+        // No transaction in unit tests: run deferred sends immediately, like the adapter does.
+        lenient().doAnswer(invocation -> {
+            invocation.getArgument(0, Runnable.class).run();
+            return null;
+        }).when(afterCommit).afterCommit(any());
+    }
 
     @Test
     void shouldDispatchUpToFreeSlots() {
         QueueProperties props = queueProps(10, 0);
         service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
             adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, agingOff(), FLAT, hierarchicalDispatchPlanner,
-            Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            afterCommit, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         when(clientCounts.totalInFlight()).thenReturn(8L);
-        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
+        when(taskRepository.bulkPromoteStarvedTasks(anyLong(), anyInt())).thenReturn(0);
         List<Task> tasks = List.of(buildQueuedTask("clientA"), buildQueuedTask("clientA"));
         when(taskRepository.findAndLockDispatchable(2, null)).thenReturn(tasks);
 
@@ -69,7 +82,12 @@ class DispatcherServiceTest {
 
         verify(remoteExecutor, times(2)).send(any(), any(), isNull());
         verify(cms, times(2)).add(eq("clientA"), eq(1L));
-        verify(clientCounts, times(2)).incrementInFlight("clientA");
+        // Sends go through the after-commit port, never directly.
+        verify(afterCommit).afterCommit(any());
+        verify(taskRepository).bulkMarkDispatched(
+            List.of(tasks.get(0).getId(), tasks.get(1).getId()).stream().sorted().toList());
+        verify(clientCounts).incrementInFlight("clientA", 2);
+        verify(clientCounts, never()).incrementInFlight(anyString());
         verify(virtualTimeService).recordDispatch(eq(tasks), any());
         verify(taskRepository, never()).findAndLockOldestDispatchable(anyInt(), any());
     }
@@ -79,13 +97,13 @@ class DispatcherServiceTest {
         QueueProperties props = queueProps(5, 0);
         service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
             adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, agingOff(), FLAT, hierarchicalDispatchPlanner,
-            Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            afterCommit, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         when(clientCounts.totalInFlight()).thenReturn(5L);
-        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
 
         service.dispatch();
 
+        verify(taskRepository).bulkPromoteStarvedTasks(60_000L, 50);
         verifyNoInteractions(remoteExecutor, virtualTimeService);
         verify(taskRepository, never()).findAndLockDispatchable(anyInt(), any());
     }
@@ -95,21 +113,20 @@ class DispatcherServiceTest {
         QueueProperties props = queueProps(10, 2);
         service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
             adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, agingOff(), FLAT, hierarchicalDispatchPlanner,
-            Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            afterCommit, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         when(clientCounts.totalInFlight()).thenReturn(0L);
-        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
+        when(taskRepository.bulkPromoteStarvedTasks(anyLong(), anyInt())).thenReturn(0);
         Task task = buildQueuedTask("tenantX");
         when(taskRepository.findAndLockDispatchable(10, 2)).thenReturn(List.of(task));
+        when(taskRepository.bulkMarkDispatched(List.of(task.getId()))).thenReturn(1);
 
         service.dispatch();
 
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.DISPATCHED);
-        // DB-clock unification: dispatch leaves a pre-existing stamp untouched.
-        assertThat(task.getUpdatedAt()).isEqualTo(FIXED_NOW.minusMillis(100));
-        verify(taskRepository).save(task);
+        verify(taskRepository).bulkMarkDispatched(List.of(task.getId()));
         verify(cms).add("tenantX", 1L);
-        verify(clientCounts).incrementInFlight("tenantX");
+        verify(clientCounts).incrementInFlight("tenantX", 1);
+        verify(clientCounts, never()).incrementInFlight(anyString());
         verify(remoteExecutor).send(task.getId(), task.getPayload(), null);
     }
 
@@ -119,14 +136,14 @@ class DispatcherServiceTest {
         service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
             adaptiveRpsController, adaptiveRpsOff(), virtualTimeService,
             AgingServiceTest.service(AgingPolicy.LINEAR, 100.0), FLAT, hierarchicalDispatchPlanner,
-            Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            afterCommit, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         Task front = buildQueuedTask("clientA").setPriority(1_000L);                       // effective 1000
         Task second = buildQueuedTask("clientA").setPriority(1_200L);                      // effective 1200
         Task oldBack = buildQueuedTask("clientB").setPriority(9_000L)
             .setCreatedAt(FIXED_NOW.minusSeconds(85));                                      // effective 500
         when(clientCounts.totalInFlight()).thenReturn(0L);
-        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
+        when(taskRepository.bulkPromoteStarvedTasks(anyLong(), anyInt())).thenReturn(0);
         when(taskRepository.findAndLockDispatchable(200, null)).thenReturn(List.of(front, second));
         when(taskRepository.findAndLockOldestDispatchable(200, null)).thenReturn(List.of(oldBack, front));
 
@@ -145,11 +162,11 @@ class DispatcherServiceTest {
         service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
             adaptiveRpsController, adaptiveRpsOff(), virtualTimeService,
             AgingServiceTest.service(AgingPolicy.LINEAR, 100.0), FLAT, hierarchicalDispatchPlanner,
-            Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            afterCommit, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         Task aged = buildQueuedTask("clientA").setPriority(9_000L).setCreatedAt(FIXED_NOW.minusSeconds(30));
         when(clientCounts.totalInFlight()).thenReturn(0L);
-        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
+        when(taskRepository.bulkPromoteStarvedTasks(anyLong(), anyInt())).thenReturn(0);
         when(taskRepository.findAndLockDispatchable(200, null)).thenReturn(List.of(aged));
         when(taskRepository.findAndLockOldestDispatchable(200, null)).thenReturn(List.of(aged));
 
@@ -166,13 +183,13 @@ class DispatcherServiceTest {
         FairnessHierarchy hierarchical = FairnessHierarchyTest.hierarchy(FairnessMode.HIERARCHICAL, Map.of());
         service = new DispatcherService(taskRepository, cms, clientCounts, remoteExecutor, props,
             adaptiveRpsController, adaptiveRpsOff(), virtualTimeService, agingOff(), hierarchical,
-            hierarchicalDispatchPlanner, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+            hierarchicalDispatchPlanner, afterCommit, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
         Task first = buildQueuedTask("acme/cold");
         Task second = buildQueuedTask("acme/hot");
         HierarchicalDispatchPlanner.Selection selection =
             new HierarchicalDispatchPlanner.Selection(List.of(first, second), null);
         when(clientCounts.totalInFlight()).thenReturn(0L);
-        when(taskRepository.findStarvedTasks(anyLong(), anyInt())).thenReturn(List.of());
+        when(taskRepository.bulkPromoteStarvedTasks(anyLong(), anyInt())).thenReturn(0);
         when(hierarchicalDispatchPlanner.select(3, null)).thenReturn(selection);
 
         service.dispatch();
