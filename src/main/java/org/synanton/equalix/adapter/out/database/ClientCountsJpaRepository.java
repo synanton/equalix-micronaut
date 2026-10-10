@@ -14,11 +14,12 @@ public interface ClientCountsJpaRepository extends GenericRepository<ClientCount
 
     @Query(value = """
         INSERT INTO client_counts (fairness_key, in_flight_count, updated_at)
-        VALUES (:key, 1, now())
+        VALUES (:key, GREATEST(0, :delta), now())
         ON CONFLICT (fairness_key)
-        DO UPDATE SET in_flight_count = GREATEST(0, client_counts.in_flight_count + 1), updated_at = now()
+        DO UPDATE SET in_flight_count = GREATEST(0, client_counts.in_flight_count + :delta),
+            updated_at = now()
         """, nativeQuery = true)
-    void incrementInFlight(String key);
+    void incrementInFlight(String key, int delta);
 
     @Query(value = """
         UPDATE client_counts

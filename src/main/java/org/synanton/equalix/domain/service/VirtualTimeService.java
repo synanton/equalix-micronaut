@@ -1,8 +1,8 @@
 package org.synanton.equalix.domain.service;
 
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.function.ToDoubleFunction;
 import jakarta.inject.Singleton;
 import jakarta.inject.Inject;
@@ -71,7 +71,8 @@ public class VirtualTimeService {
      * @param agingCredit aging credit A(W) of each task at dispatch time, in virtual-time units
      */
     public void recordDispatch(Collection<Task> dispatchedTasks, ToDoubleFunction<Task> agingCredit) {
-        Map<String, Double> highestTagPerKey = new HashMap<>();
+        // Key order, like every other multi-row write in a tick (P1).
+        Map<String, Double> highestTagPerKey = new TreeMap<>();
         double highestServedPosition = Double.NEGATIVE_INFINITY;
         for (Task task : dispatchedTasks) {
             Double finishTag = task.getVirtualFinish();

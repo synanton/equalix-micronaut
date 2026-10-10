@@ -1,5 +1,6 @@
 package org.synanton.equalix.adapter.out.database;
 
+import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.annotation.Query;
 import io.micronaut.data.annotation.Repository;
 import io.micronaut.data.model.Pageable;
@@ -60,6 +61,72 @@ public interface TaskJpaRepository extends GenericRepository<TaskEntity, UUID> {
     // updated_at is DB-assigned by trg_set_updated_at; no need to set it here.
     @Query("UPDATE TaskEntity t SET t.status = :newStatus WHERE t.id IN :ids")
     int updateStatusBatch(List<UUID> ids, TaskStatus newStatus);
+
+    // Write-path optimizations (O1/O2): targeted UPDATEs replace load-modify-save
+    // round-trips. Version is bumped inline so concurrent holders still fail fast
+    // on stale state. Micronaut Data auto-detects modifying queries.
+
+    /** Bulk dispatch transition for rows locked by the {@code TaskLockingQueries} readers. */
+    @Query(value = """
+        UPDATE tasks SET status = 'DISPATCHED', version = version + 1
+        WHERE id IN :ids AND status = 'QUEUED'
+        """, nativeQuery = true)
+    int bulkMarkDispatched(List<UUID> ids);
+
+    /** Single dispatch transition, attaching the predecessor result for sequential tasks. */
+    @Query(value = """
+        UPDATE tasks SET status = 'DISPATCHED', previous_result = :previousResult,
+            version = version + 1
+        WHERE id = :id AND status = 'QUEUED'
+        """, nativeQuery = true)
+    int markDispatched(UUID id, @Nullable byte[] previousResult);
+
+    /** Queueing transition for the priority calculator (status, priority, finish tag). */
+    @Query(value = """
+        UPDATE tasks SET status = 'QUEUED', priority = :priority, virtual_finish = :virtualFinish,
+            version = version + 1
+        WHERE id = :id AND status = 'RECEIVED'
+        """, nativeQuery = true)
+    int markQueued(UUID id, long priority, @Nullable Double virtualFinish);
+
+    /** Atomic terminal transition: status guard and version check run in the UPDATE. */
+    @Query(value = """
+        UPDATE tasks SET status = CAST(:status AS task_status), result = :result,
+            last_error = :lastError, completed_at = :completedAt, version = version + 1
+        WHERE id = :id AND status IN ('DISPATCHED', 'COMMITTED') AND version = :version
+        """, nativeQuery = true)
+    int completeTask(UUID id, long version, String status, @Nullable byte[] result,
+        @Nullable String lastError, java.time.Instant completedAt);
+
+    /** Executor-ack transition; silently skips tasks that already moved on. */
+    @Query(value = """
+        UPDATE tasks SET status = 'COMMITTED', version = version + 1
+        WHERE id = :id AND status = 'DISPATCHED'
+        """, nativeQuery = true)
+    int markCommitted(UUID id);
+
+    /** Timeout transition with the same in-UPDATE guards as {@link #completeTask}. */
+    @Query(value = """
+        UPDATE tasks SET status = 'TIMEOUT', last_error = :lastError, completed_at = :completedAt,
+            version = version + 1
+        WHERE id = :id AND status IN ('DISPATCHED', 'COMMITTED') AND version = :version
+        """, nativeQuery = true)
+    int markTimeout(UUID id, long version, String lastError, java.time.Instant completedAt);
+
+    /** Bulk starvation promotion (priority → 0); rows already promoted are untouched. */
+    @Query(value = """
+        UPDATE tasks SET priority = 0, version = version + 1
+        WHERE id IN (
+            SELECT id FROM tasks
+            WHERE status = 'QUEUED'
+              AND is_sequential = false
+              AND (priority IS NULL OR priority <> 0)
+              AND created_at < now() - (:olderThanMs || ' milliseconds')::interval
+            ORDER BY created_at ASC
+            LIMIT :limit
+        )
+        """, nativeQuery = true)
+    int bulkPromoteStarvedTasks(long olderThanMs, int limit);
 
     @Query("""
         SELECT t.fairnessKey, COUNT(t)

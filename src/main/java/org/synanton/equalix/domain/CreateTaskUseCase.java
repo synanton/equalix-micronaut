@@ -5,6 +5,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
+import io.micronaut.transaction.annotation.Transactional;
 import jakarta.inject.Singleton;
 import jakarta.inject.Inject;
 import org.synanton.equalix.config.properties.QueueProperties;
@@ -33,6 +34,10 @@ public class CreateTaskUseCase implements TaskIngestionPort {
     private final FairnessHierarchy fairnessHierarchy;
     private final Clock clock;
 
+    // One transaction for task insert + sequence-state bootstrap (a crash between the
+    // two used to leave sequential tasks without state); also required by the
+    // session-native findOrCreate upsert.
+    @Transactional
     @Override
     public Task createTask(
         String fairnessKey,
@@ -78,7 +83,7 @@ public class CreateTaskUseCase implements TaskIngestionPort {
             .setDependsOnTaskId(dependsOnTaskId)
             .setRequiresPreviousResult(requiresPreviousResult);
 
-        Task saved = taskRepository.save(task);
+        Task saved = taskRepository.insert(task);
         if (isSequential) {
             sequenceStateRepository.findOrCreate(fairnessKey);
         }

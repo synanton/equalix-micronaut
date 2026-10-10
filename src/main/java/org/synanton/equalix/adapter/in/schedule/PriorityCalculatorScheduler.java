@@ -19,6 +19,6 @@ public class PriorityCalculatorScheduler {
 
     @Scheduled(fixedDelay = "${app.queue.priority-calc-interval:100}ms")
     public void run() {
-        priorityCalculatorService.run();
+        TransientRetry.run("priorityCalculator", priorityCalculatorService::run);
     }
 }
